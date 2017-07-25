@@ -22,18 +22,17 @@
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
 #define EEPROM_addrs  1
-#define LED A3
-#define V_BATT A1
-#define SW_GPS  A2   
-#define RX_GPS  3
-#define TX_GPS  4
-#define SW_TOL  5
-#define RX_OL  10
-#define TX_OL  11
-#define I_HUM  2    // air --> 1, water --> 0
-#define SW_RCK 8
-#define RX_RCK 13
-#define TX_RCK 12
+
+#define SW_GPS  4
+#define RX_GPS  12
+#define TX_GPS  13
+#define SW_TOL  3
+#define RX_OL  11
+#define TX_OL  10
+#define I_HUM  A5    // air --> 1, water --> 0
+#define SW_RCK A4
+#define RX_RCK  8
+#define TX_RCK  9
 
 #define BIG_SLEEP 10                     // in minutes
 //////// ROCKBLOCK CONFIG //////////////////////////////////////////////////////////
@@ -63,7 +62,6 @@ byte ol_status=0;     //ol status
 bool screen=0;   // connects OpenLog directly
 bool logger=0;   //logs acceleromter
 bool S_en=0;    //checked at beginning
-bool gps_twiceloop=0;
 time_t GPS_timed;       // global gps
 time_t gf_time;
 byte state=0;    // 1: in air    3: deployed    5: in water    7: recovered
@@ -76,8 +74,7 @@ void digitalClockDisplay();
 void printDigits(int digits);
 int ol_cmd();
 int ol_append();
-int ol_potbot_parameters(int num_parameters);
-int rock_rx_parameters(int num_parameters, uint8_t rock_rx[]);
+int ol_potbot_parameters();
 int sequence();
 void ol_timestamp();
 void ol_printDigits(char separator, int digits);
@@ -86,22 +83,15 @@ void ol_logevent(int event);
 void myWatchdogEnable(int select_time) ;
 void print_time(time_t temp1);
 void rck_on_off(bool state);
-void clear_buffer();
-void LED_blink(int blinks, unsigned long delay_time);
 
 void setup() {
-  bool err_gps=0, err_rock=0, err_ol=0;
   pinMode(SW_GPS,OUTPUT);
   pinMode(SW_TOL,OUTPUT);
   pinMode(SW_RCK, OUTPUT);
   pinMode(I_HUM,INPUT);
-  pinMode(LED,OUTPUT);
-  pinMode(9,INPUT_PULLUP);
-  digitalWrite(SW_TOL,LOW);
-  command('G');
-  digitalWrite(SW_RCK,LOW);
+ 
   // Open serial communications and wait for port to open:
-  Serial.begin(57600);
+  Serial.begin(4800);
   delay(100);
    for (unsigned long start = millis(); millis() - start < 2000;)
    {
@@ -114,93 +104,62 @@ void setup() {
   // set the data rate for the SoftwareSerial port
   myRock.begin(19200);   // 19200 rockblock
   myGPS.begin(4800);   // 4800 GPS
-  ol_serial.begin(9600);
+  ol_serial.begin(4800);
   delay (1000);
 
    if(Serial)
-    Serial.println(F("Rockblock v 7.0"));
-  LED_blink(5,100);
+    Serial.println("Rockblock v 6.0");
+ 
   delay(500);
-
-  
-  if (!ol_potbot_parameters(6))
-    err_ol=1;
+  //ol_potbot_parameters();             /// UNDO
   state=0;
-
-  // TEST GPS
-  command('g');
-  myGPS.listen();
-  err_gps=1;
-  for (unsigned long start = millis(); millis() - start < 2000;)
-  {
-   if (myGPS.available())
-   {
-   char c = myGPS.read();
-   Serial.write(c); // uncomment this line if you want to see the GPS data flowing
-   if (c=='G') // valid data?
-      {Serial.println(F("GPS valid"));
-      err_gps=0; break;}  //clear error flag
-   }
-  }
-  command('G');
-
-
- ///////wait for command
-  // Serial.println(F("Wait for command: 5s"));
-  // char data;
-  // for (unsigned long start = millis(); millis() - start < 2000;)
-  // {
-  // if (Serial.available()){
-  //   data   = Serial.read();
-  //   Serial.write(data);
-  //   Serial.print(F("   :"));
-  //   command(data);
-  //   return;
-  //   }
-  // }
-  // INIT ROCK BLOCK  
-  isbd.attachConsole(Serial);
-  isbd.attachDiags(Serial);
+    
+  if (S_en) isbd.attachConsole(Serial);
+  if (S_en) isbd.attachDiags(Serial);
   myRock.listen();
   isbd.setPowerProfile(1);
-  int rock_init = isbd.begin();
+  isbd.begin();
   isbd.setMinimumSignalQuality(MIN_SIG_CSQ);   // set to 0 for continous send
   isbd.adjustATTimeout(AT_TIMEOUT);                       // Wait for response timeout
   isbd.adjustSendReceiveTimeout(SBDIX_TIMEOUT);               // send SBDIX loop timout
 
-  if (rock_init) 
+  int get_sig;
+  
+  err = isbd.getSignalQuality(get_sig);
+  if (err != 0)
   {
-    err_rock=1; Serial.println(F("Rock error!"));
-  }else 
-    {err_rock=0; Serial.println(F("Rock OK!"));}
-
-  delay(1000);
-  // LED error indicator
-  if (err_ol | err_gps | err_rock)
-  {
-    if (err_ol)    // OL EROR
-      {LED_blink(3,250); delay(1000);}
-    if (err_gps)
-      {LED_blink(5,250); delay(1000);}  // GPS
-    if (err_rock)
-      {LED_blink(8,200); delay(1000);}   //ROCK
+    if (S_en) Serial.print("SignalQuality failed: error ");
+    if (S_en) Serial.println(err);
+    return;
   }
-  Serial.println(F("Self test passed!!"));
-  LED_blink(1,2000);
+  if (S_en) Serial.print("Signal quality is:   ");
+  if (S_en) Serial.println(get_sig);
+
+     //wait for command
+  Serial.println("Wait for command: 5s");
+  char data;
+  for (unsigned long start = millis(); millis() - start < 5000;)
+  {
+  if (Serial.available()){
+    data   = Serial.read();
+    Serial.write(data);
+    Serial.print("   :");
+    command(data);
+    }
+  }
+
   set_sleep_mode(SLEEP_MODE_PWR_SAVE);  //arduino
-  Serial.println(F("Sleep mode set"));
 }
 
 void loop() {
-  // Serial.println(F("Begin loop"));
-  // Serial.println(F("screen"));
+
   char data;
   static bool cur_hum, prev_hum;
   
   if ((now()>gf_time) && (gf))
-    {gf=0; Serial.println("GF expired");}
+    {gf=0; if (S_en) Serial.println("GF expired");}
 
-  while (screen)                        // OPENLONG SCREEN INTERFACE
+  if (screen)                        // OPENLONG SCREEN INTERFACE
        {  
         ol_serial.listen();
         if (ol_serial.available()) {
@@ -210,15 +169,14 @@ void loop() {
         ol_serial.write(Serial.read());
          }
       }
-  // Serial.println(F("After screen"));
+  else {
           // DEBUG interface
       if (Serial.available() && (data   = Serial.read()) != 13){
-      Serial.print("new command");
-      Serial.write(data);
-      Serial.print("   :");
+      if (S_en) Serial.print("new command");
+      if (S_en) Serial.write(data);
+      if (S_en) Serial.print("   :");
       command(data);
       }
-  // Serial.println(F("After debug"));
       // high priority log humdity sensor
       cur_hum=digitalRead(I_HUM);
       if (cur_hum!=prev_hum) 
@@ -227,14 +185,14 @@ void loop() {
           else ol_logevent(8);               //E8 in water
           prev_hum=cur_hum;
         }
-  // Serial.println(F("After log hum"));
       delay(10)  ;
       sequence();
       delay(100)  ;
       myWatchdogEnable(8);
-      // Serial.println("sleep.");
+      ///////////// Serial.println("sleep.");
       delay(10);
       sleep_mode();
+    }
 }
 
 
@@ -262,7 +220,7 @@ int get_gps(float *latitude, float *longitude)
      while (myGPS.available())
      {
      char c = myGPS.read();
-      // Serial.write(c); // uncomment this line if you want to see the GPS data flowing
+      Serial.write(c); // uncomment this line if you want to see the GPS data flowing
      if (gps.encode(c)) // Did a new valid sentence come in?
      {
       newData = true;
@@ -279,8 +237,8 @@ int get_gps(float *latitude, float *longitude)
     &hour, &minutes, &second, &hundredths, &fix_age);
     setTime(hour,minutes,second,day,month,year);
     setTime(now()+28800);
-    Serial.print("GPS received, messages:");
-    Serial.println(gps_thresh,DEC);
+    if (S_en) Serial.print("GPS received, messages:");
+    if (S_en) Serial.println(gps_thresh,DEC);
         
     gps_thresh=0;
     
@@ -297,9 +255,9 @@ int command(char data){
   switch (data){
 
     case 'T': 
-      digitalWrite(SW_TOL, HIGH);
-      Serial.print(digitalRead(SW_TOL),DEC);
-      Serial.print(" LOGGER OFF \n");
+      digitalWrite(SW_TOL, LOW);
+      if (S_en) Serial.print(digitalRead(SW_TOL),DEC);
+      if (S_en) Serial.print(" LOGGER OFF \n");
       break;
 
     case 'o': 
@@ -307,24 +265,24 @@ int command(char data){
       break;
 
     case 'g': 
-      digitalWrite(SW_GPS, LOW);
-      Serial.println("GPS on...");
+      digitalWrite(SW_GPS, HIGH);
+      if (S_en) Serial.println("GPS on...");
   break;
   
   case 'G': 
-      digitalWrite(SW_GPS, HIGH);
-      Serial.println("GPS off...");
+      digitalWrite(SW_GPS, LOW);
+      if (S_en) Serial.println("GPS off...");
   break;
       
     case 'h':
-      Serial.print(digitalRead(I_HUM),DEC);
-      Serial.print("  hum\n");
+      if (S_en) Serial.print(digitalRead(I_HUM),DEC);
+      if (S_en) Serial.print("  hum\n");
       break;
 
 
     case 'w':
-      digitalWrite(SW_TOL, LOW);
-      Serial.print("Open log writing test\n");
+      digitalWrite(SW_TOL, HIGH);
+      if (S_en) Serial.print("Open log writing test\n");
       delay(1000);
       for(int i = 1 ; i < 10 ; i++) {
       ol_serial.print(i, DEC);     
@@ -333,32 +291,32 @@ int command(char data){
       }
       
       delay(1000);
-      Serial.print("finish writing\n");
-      digitalWrite(SW_TOL, HIGH);  
+      if (S_en) Serial.print("finish writing\n");
+      digitalWrite(SW_TOL, LOW);  
 
       break;
 
      case 's':                                   //screen
-     digitalWrite(SW_TOL, LOW);
+     digitalWrite(SW_TOL, HIGH);
      ol_serial.listen();
      ol_status=0;
      ol_cmd();
      state=100;
      screen=1;
-     Serial.println("SCREEN OL");
+     if (S_en) Serial.print("SCREEN OL");
      break;
 
 
     case 'r':
     EEPROM.write(EEPROM_addrs, 0);
-    Serial.print("  reset logger file to new01.txt\n");
+    if (S_en) Serial.print("  reset logger file to new01.txt\n");
     break;
 
     case 13:
     break;
       
     default:
-      Serial.print("  error\n");
+      if (S_en) Serial.print("  error\n");
       break;
     }
   return 1;
@@ -409,40 +367,82 @@ void ol_printDigits(char separator, int digits){
 
 
 int ol_cmd(){
+if (!ol_status)
+{ 
   char temp;
-  digitalWrite(SW_TOL, LOW);
-  Serial.print(digitalRead(SW_TOL),DEC);
-  Serial.print("Open command mode\n");
+  digitalWrite(SW_TOL, HIGH);
+  if (S_en) Serial.print(digitalRead(SW_TOL),DEC);
+  if (S_en) Serial.print("Open log command mode\n");
   ol_serial.listen();
   delay(50);
   for (int i=0; ; i++){
-    delay(5);
-    ol_serial.write(26);
-    ol_serial.write(26);
-    ol_serial.write(26);
-    delay(10);
-    for (int z=0; z<10 ; z++)
-      if (ol_serial.available())
-        //Serial.println(ol_serial.read());
-        if(ol_serial.read()=='>')
-        { Serial.print("attempt: "); Serial.print(i, DEC); Serial.println(">");   delay(5); 
-          ol_serial.println("");
-          for (int j=0; j<200; j++)          //flush
-            if (ol_serial.available())
-              {temp=ol_serial.read(); 
-              //Serial.print(temp);
-              }
-          delay(5);
-          Serial.println("");
-          Serial.println("OL CMD_MODE");
-          ol_status=1; 
-          return 1;
-        }
       delay(5);
-      if (i>=250) { Serial.println("error openlong cmd"); return 0;}
-    }     
-    
+      ol_serial.write(26);
+      delay(5);
+      ol_serial.write(26);
+      delay(5);
+      ol_serial.write(26);
+      delay(10);
+      for (int z=0; z<10 ; z++)
+        if (ol_serial.available())
+          //Serial.println(ol_serial.read());
+          if(ol_serial.read()=='>')
+          { 
+            Serial.print("attempt: "); Serial.print(i, DEC); Serial.println(">");   delay(5); 
+            ol_serial.println("");
+            for (int j=0; j<10; j++)          //flush
+              if (ol_serial.available())
+                {temp=ol_serial.read(); delay(1) ;
+                //Serial.print(temp);
+                }
+            delay(5);
+            if (S_en) Serial.println("");
+            if (S_en) Serial.println("OL CMD_MODE");
+            ol_status=1; 
+            return 1;
+          }
+        delay(5);
+        if (i>=500) { Serial.println("error openlong cmd"); return 0;}
+      }
+    }
 } 
+
+// int ol_cmd(){
+// if (!ol_status)
+// { 
+//   char temp;
+//   digitalWrite(SW_TOL, HIGH);
+//   Serial.print(digitalRead(SW_TOL),DEC);
+//   Serial.print("Open log ON\n");
+//   ol_serial.listen();
+//   delay(100);
+//   for (int i=0; i<100 ; i++){
+//       delay(5);
+//       ol_serial.write(26);
+//       delay(5);
+//       for (int z=0; z<10 ; z++)
+//         if (ol_serial.available())
+//           //Serial.println(ol_serial.read());
+//           if(ol_serial.read()=='>')
+//           { Serial.print("try: "); Serial.print(i, DEC); Serial.println(">");   delay(20); 
+//             ol_serial.println("");
+//             for (int j=0; j<200; j++)          //flush
+//               if (ol_serial.available())
+//                 {temp=ol_serial.read(); 
+//                 //Serial.print(temp);
+//                 }
+//             delay(5);
+//             Serial.println("");
+//             Serial.println("OL CMD_MODE");
+//             return 1;
+//           }
+//         delay(5);
+//         if (i>=99) { Serial.println("error openlong cmd"); return 0;}
+//       }
+//      ol_status=1; 
+//     }
+// } 
+
 
 int ol_append(){
   if (ol_status!=2)
@@ -452,14 +452,12 @@ int ol_append(){
       delay(10);
       ol_serial.println("append log.txt");
       delay(10);
-      Serial.println("Openlong ready");
+      if (S_en) Serial.println("Openlong ready");
       ol_status=2;
       return 1;
   }
 }
-
-
-int ol_potbot_parameters(int num_parameters){
+int ol_potbot_parameters(){
   int  par_index=0;  
   char character;
   int temp=0;
@@ -467,192 +465,124 @@ int ol_potbot_parameters(int num_parameters){
   delay(200);
   ol_serial.println("read potbot");
   for (int i=0; i< 200; i++) {
-  if (ol_serial.available()) 
-  {
-    character= ol_serial.read(); //Serial.write(character);
-    Serial.print(character);    //uncomment to see openlog parameters load
-    if (par_index>num_parameters) //end of line
+    if (ol_serial.available()) 
     {
-    Serial.println("\tparameters loaded");  ol_serial.println("reset"); return 1; break;
-    }   //LOW
-    if ((character>= '0') &&  (character<= '9'))
-      temp= temp*10 + character - '0';
-    else if (character==',')
-    {
-      parameters[par_index]=temp;
-      par_index ++;
-      temp=0;
-      Serial.print("\t   paramter[");
-      Serial.print(par_index-1);
-      Serial.print("] :");
-      Serial.println(parameters[par_index - 1]);
+      character= ol_serial.read(); //Serial.write(character);
+      if (character=='.') {Serial.println("parameters loaded");digitalWrite(SW_TOL, LOW);return 1; break;}
+        if ((character>= '0') &&  (character<= '9'))
+          temp= temp*10 + character - '0';
+        else if (character==',')
+        {
+          parameters[par_index]=temp;
+          par_index ++;
+          temp=0;
+          if (S_en) Serial.print("    parameter[");
+          if (S_en) Serial.print(par_index-1);
+          if (S_en) Serial.print("] :");
+          if (S_en) Serial.println(parameters[par_index - 1]);
+        }
+     }
+     delay(10);
     }
-   }
-   delay(10);
-  }
-   Serial.println("\tError OL_parameters");
-   digitalWrite(SW_TOL, HIGH);
-   return 0;
-}
-
-int rock_rx_parameters(int num_parameters, uint8_t rock_rx[]){
-  int  par_index=0;  
-  char character;
-  int temp=0;
-  for (int i=0; i< 50; i++) {
-  if (rock_rx[i]>48) 
-  {
-    character= rock_rx[i];
-    Serial.print(character);    //uncomment to see openlog parameters load
-    if (par_index>num_parameters) //end of line
-    {
-    Serial.println("\tparameters loaded"); return 1; break;
-    }   //LOW
-    if ((character>= '0') &&  (character<= '9'))
-      temp= temp*10 + character - '0';
-    else if (character==',')
-    {
-      parameters[par_index]=temp;
-      par_index ++;
-      temp=0;
-      Serial.print("\t   paramter[");
-      Serial.print(par_index-1);
-      Serial.print("] :");
-      Serial.println(parameters[par_index - 1]);
-    }
-   }
-   delay(10);
-  }
-   Serial.println("\tError OL_parameters");
-   digitalWrite(SW_TOL, HIGH);
+   if (S_en) Serial.println("Error OL_parameters");
+   digitalWrite(SW_TOL, LOW);
    return 0;
 }
 
 int sequence(){
-  // Serial.print(F("Init sequence:"));
-  // Serial.println(state);  
+  
   static time_t temp1, temp2;     //global timers
   String str_rock= " ";     //Create String and Capture current time
-  uint8_t rock_rx[20];
-  size_t rock_rx_buff_size;
-  int batt;
-  float voltage;
 
-  switch(state){  
+  switch(state){
+
   case 0:
-      ws=0; rb=0; gp=0;   //init variables  except from gf
+      ws=0, rb=0, gp=0,   //init variables  except from gf
       digitalWrite(SW_GPS, LOW);  //stops gps
-      digitalWrite(SW_TOL, HIGH);   //openlog off;
       rck_on_off(0);   // Rockblock off
-      Serial.println("waiting wetswitch ...");
+      if (S_en) Serial.println("waiting wetswitch ...");
 
-      state=10;
+      state++;
       break;
-
-  case 10:
-      
-      if (digitalRead(I_HUM))       // wait hum
-      {  Serial.print("Turn GPS and Rockblock ON...");
-      state=1;
-      }
-  break;
 
   case 1:
 
       // String str_rock= " ";     //Create String and Capture current time
        // str_rock= str_rock + "Time: " + String(day()) + "/" + String(month()) + "/" + String(year()) + "   " + String(hour())+ ":" + String(minute()) + ":" + String(second());
        // str_rock= str_rock + "  Loc: " + String(latitude,6) + ", "+ String(longitude,6);
+      str_rock= str_rock + "Time: " + String(day()) + "/" + String(month()) + "/" + String(year()) + "   " + String(hour())+ ":" + String(minute()) + ":" + String(second()) + "  Loc: " + String(latitude,6) + ", "+ String(longitude,6);
+      if (S_en) Serial.println(str_rock);
+      
     ////////////////////////////////////
       // Send RockBlock
     //////////////////////////////////////
-      batt = analogRead(V_BATT);
-      // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
-      voltage = batt * (5/1023.0)*2;
-      //str_rock= str_rock + "T: " + String(day()) + "/" + String(month()) + "/" + String(year()) + " " + String(hour())+ ":" + String(minute()) + ":" + String(second()) + "  Loc: " + String(latitude,6) + ", "+ String(longitude,6) + " Battery:" +  String(voltage,2) ;
-      str_rock= str_rock + " " + String(day()) + "/" + String(month()) + "/" + String(year()) + " " + String(hour())+ ":" + String(minute()) + ":" + String(second()) + ";" + String(latitude,6) + ";"+ String(longitude,6) + ";" +  String(voltage,2) ;
-      Serial.println(str_rock);
-      char charBuf[80];
-      str_rock.toCharArray(charBuf, 80) ;
-      Serial.println("Message to send SBD:");
-      Serial.println(charBuf);
+      char charBuf[100];
+      str_rock.toCharArray(charBuf, 100) ;
+      if (S_en) Serial.println("Message to send SBD:");
+      if (S_en) Serial.println(charBuf);
       rck_on_off(1);   // start Rockblock
       myRock.listen();
       delay(100);
-      err = isbd.sendReceiveSBDText(charBuf, rock_rx, rock_rx_buff_size);
-      ol_logevent(1);
+      err = isbd.sendSBDText(charBuf);
       if (err != 0)
       {
-        Serial.print("sendSBDText failed: error ");
-        Serial.println(err);
-      } else if (err==0)                    //TX Successfully 
-        {
-          ol_logevent(3); rb=1;
-          Serial.println("Msg sent confirmed!");
-          Serial.print("Messages left: ");
-          Serial.println(isbd.getWaitingMessageCount());
-          rck_on_off(0);   // Rockblock off
+        if (S_en) Serial.print("sendSBDText failed: error ");
+        if (S_en) Serial.println(err);
+      }
+      if (err==0)                    //TX Successfully 
+      {
+        ol_logevent(3); rb=1;
+        if (S_en) Serial.println("Msg sent confirmed!");
+        if (S_en) Serial.print("Messages left: ");
+        if (S_en) Serial.println(isbd.getWaitingMessageCount());
+        rck_on_off(0);   // Rockblock off
+        if (S_en) Serial.println("All done going to sleep!");
+        // temp1=now() + (int)60*parameters[4];    // Big Sleep
+        temp1=now() + parameters[4];    // Big Sleep
+        if (!gp)
+          ol_logevent(7);
+        else
+          ol_logevent(5);
+        state=5;
+        break;
+      }
 
-        // if (err==0 && rock_rx[0]>48 && rock_rx_buff_size>1)
-        if (err==0)
-          {
-            Serial.println("\t\t\t...MSG RX MSG RX MSG RX....");
-            Serial.println((char)rock_rx);
-            Serial.println(rock_rx_buff_size);
-            rock_rx_parameters(6,rock_rx);
-          }
-
-          if (!gp)
-            ol_logevent(7);
-          else
-            ol_logevent(5);
-
-          if((gf) || (gps_twiceloop))
-          {
-            Serial.println("All done going to sleep!");
-            // temp1=now() + (int)60*parameters[4];    // Big Sleep
-            temp1=now() + parameters[4];    // Big Sleep
-            gps_twiceloop=0;
-            state=5;
-          }else
-          {
-            Serial.println("Not good fix, try again!");
-            gps_twiceloop=1;
-            state=1;
-          }
-
-          break;
-        }
-
-
+      ol_logevent(1);
       if (digitalRead(I_HUM))       // wait hum
       { 
         if (gf)
           {
-            Serial.print("GF OK--> Burst RB, GPS off...");
+            if (S_en) Serial.print("GF OK--> Burst RB, GPS off...");
             ol_logevent(6);
             
           }
         else 
           {
-            Serial.print("GF NOT OK-->Burst RB, GPS ON...");
+            if (S_en) Serial.print("GF N-->Burst RB, GPS ON...");
             ol_logevent(2);
             command('g');  //GPS ON
+
           }
-        get_gps(&latitude, &longitude);
+            get_gps(&latitude, &longitude);
 ////////////////  New message every time
-        // temp1=now() + 60*(int)parameters[2];    // RB time
-        temp1=now() + parameters[2];    // RB time
-        print_time(temp1);
-        // temp2=now() + 60*(int)parameters[3];    // GPS time
-        temp2=now() + parameters[3];    // GPS time
-        print_time(temp2);
-        Serial.println("To sleep");  digitalWrite(SW_RCK, HIGH); delay(2000);
-        Serial.println(F("XXX wait to turn on:"));
-        state++;
+            // temp1=now() + 60*(int)parameters[2];    // RB time
+            temp1=now() + parameters[2];    // RB time
+            print_time(temp1);
+            // temp2=now() + 60*(int)parameters[3];    // GPS time
+            temp2=now() + parameters[3];    // GPS time
+            print_time(temp2);
+            // ///  clear buffer
+            if (S_en) Serial.println("To sleep");  digitalWrite(SW_RCK, HIGH); delay(2000);
+            if (S_en) Serial.println("XXX wait to turn on:");
+
+////////////////  ASK
+
+          state++;
       }
       break;
 
   case 2:               // send message rock block + GPS   GOTO 3 or 4
+      {
         if (get_gps(&latitude, &longitude))
         {
            ol_logevent(4);             //GET_GPS
@@ -660,7 +590,6 @@ int sequence(){
            gp=1; gf=1;
            gf_time=now() + parameters[2];
            // gf_time=now() + parameters[2]*60;
-           clear_buffer();
            state=1;
            break;
         }
@@ -671,50 +600,54 @@ int sequence(){
       rck_on_off(1);   // start Rockblock
       myRock.listen();
 
-      Serial.print("Try SBDIX");
+      if (S_en) Serial.print("Try SBDIX");
       err = isbd.try_SBDIX();
       if (err != 0)
       {
-        Serial.print(F("sendSBDText failed: error "));
-        Serial.println(err);
+        if (S_en) Serial.print("sendSBDText failed: error ");
+        if (S_en) Serial.println(err);
       }
       if (err==0)                    //TX Successfully 
       {
         ol_logevent(3); rb=1;
-        Serial.println(F("Msg sent confirmed!"));
-        Serial.print(F("Messages left: "));
-        Serial.println(isbd.getWaitingMessageCount());
-        ////
-        // err = isbd.sendReceiveSBDText(charBuf, rock_rx, rock_rx_buff_size);
-        // if (err==0 && rock_rx[0]>48 && rock_rx_buff_size>1)
-        // {
-        //     Serial.println("\t\t\t...MSG RX MSG RX MSG RX....");
-        //     Serial.println((char)rock_rx);
-        //     Serial.println(rock_rx_buff_size);
-        //     rock_rx_parameters(6,rock_rx);
-        // }
-        ////
+        if (S_en) Serial.println("Msg sent confirmed!");
+        if (S_en) Serial.print("Messages left: ");
+        if (S_en) Serial.println(isbd.getWaitingMessageCount());
         rck_on_off(0);   // Rockblock off
       }
 ///////////
     if ((now()> temp1) && (now()> 0))    //   evaluate RB time out
       {
-        clear_buffer();
+            delay(10);   //CLEAR BUFFER
+            rck_on_off(1);   // start Rockblock
+            myRock.listen();
+
+            if (S_en) Serial.println("XXX start clear buffer:");
+            err=isbd.clear_buffer(2);
+            if (err != 0)
+              {
+                if (S_en) Serial.print("Clear Buffer failed: error ");
+                if (S_en) Serial.println(err);
+              }else
+              {
+                if (S_en) Serial.print("Clear Buffer Successfully ");
+              }
+            delay(100);
         rck_on_off(0);   // Rockblock off
         print_time(temp1);
         print_time(now());
-        Serial.println(F("RCK timed out"));
+        if (S_en) Serial.println("RCK timed out");
       }
     if ((now()> temp2) && (now()> 5000))   //   evaluate GPS time out
       {
         command('G');            
         print_time(temp2);   //GPS off
         print_time(now());
-        Serial.println(F("GPS timed out"));
+        if (S_en) Serial.println("GPS timed out");
       }
     if (rb && gf)          //evaluate GPS and RB
       {
-        Serial.println(F("All done going to sleep!"));
+        if (S_en) Serial.println("All done going to sleep!");
         // temp1=now() + 60*parameters[4];    // Big Sleep
         temp1=now() + parameters[4];    // Big Sleep
         if (!gp)
@@ -726,20 +659,19 @@ int sequence(){
       }
     if ((now()> temp1) && (now()> temp2))  //   evaluate overall time out
       {
-        Serial.println(F("No signal going to small_sleep"));
+        if (S_en) Serial.println("No signal going to small_sleep");
         temp1=now() + parameters[6];    // Sleep no signal
         // temp1=now() + 60*(int)parameters[6];    // Sleep no signal
         ol_logevent(10); state=5;
-        clear_buffer();
         break;
-        
+        //TODO: FLUSH BUFFER
       }
     break;
-    
+    }
   case 5:
       if (now()> temp1)  //   Sleep
       {
-        Serial.println("Back to beginning");
+        if (S_en) Serial.println("Back to beginning");
         state=0;
         break;
       }
@@ -747,15 +679,14 @@ int sequence(){
   
       
   }  // switch end 
-    // Serial.println(F("Finish sequence"));
 }// function sequence() end
 // logs event timestamp and position
 
 void ol_logevent(int event)
 {
       ol_serial.listen();
-      digitalWrite(SW_TOL,LOW);
-      delay(1000);
+      delay(20);
+      ol_append();
       ol_timestamp();
       ol_serial.print("E");
       ol_serial.print(event);
@@ -764,9 +695,7 @@ void ol_logevent(int event)
       ol_serial.print(';');
       ol_serial.print(longitude,6);
       ol_serial.println("");
-      delay(3000);
-      digitalWrite(SW_TOL,HIGH);
-
+      delay(20);
 }
 
 void myWatchdogEnable(int select_time) {  // turn on watchdog timer; interrupt mode every
@@ -783,7 +712,7 @@ ISR(WDT_vect) {
  cli();
  wdt_disable();
  setTime(now()+1); // corect time
- // Serial.println(F("wakeup!"));
+ //Serial.println("wakeup!");
  sei();
 }
 
@@ -794,7 +723,7 @@ void print_time(time_t temp1)
   breakTime(temp1, tm);
   String str_time= " ";     //Create String and Capture current time
   str_time= str_time + "Time: " + String(tm.Day) + "/" + String(tm.Month) + "/" + String(tm.Day) + "   " + String(tm.Hour)+ ":" + String(tm.Minute) + ":" + String(tm.Second);
-  Serial.println(str_time);
+  if (S_en) Serial.println(str_time);
 }
 
 void rck_on_off(bool state)
@@ -810,34 +739,3 @@ void rck_on_off(bool state)
     }
     delay(2000);
 }
-
-void clear_buffer()
-{
-  delay(10);   //CLEAR BUFFER
-  rck_on_off(1);   // start Rockblock
-  myRock.listen();
-
-  Serial.println(F("XXX start clear buffer:"));
-  err=isbd.clear_buffer(0);
-  if (err != 0)
-    {
-      Serial.print(F("Clear Buffer failed: error "));
-      Serial.println(err);
-    }else
-    {
-      Serial.print(F("Clear Buffer Successfully "));
-    }
-  delay(100);
-}
-
-void LED_blink(int blinks, unsigned long delay_time)
-{
-   for (int i=0; i<blinks; i++)
-   {
-    digitalWrite(LED, HIGH);
-    delay(delay_time);
-    digitalWrite(LED, LOW);
-    delay(delay_time);
-  }
-}
-
