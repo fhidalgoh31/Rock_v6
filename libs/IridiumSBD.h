@@ -77,7 +77,7 @@ public:
 
    void attachConsole(Stream &stream);
 // CUSTOM
-   int try_SBDIX();   //Tries SBDIX big loop
+   int try_SBDIX(uint8_t *rxBuffer, size_t *prxBufferSize);   //Tries SBDIX big loop
    int IridiumSBD::clear_buffer(char delete_type);
 #if ISBD_DIAGS
    void attachDiags(Stream &stream);

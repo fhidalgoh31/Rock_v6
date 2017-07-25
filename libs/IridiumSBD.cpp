@@ -703,7 +703,7 @@ void IridiumSBD::send(uint16_t n)
 }
 
 
-int IridiumSBD::try_SBDIX()
+int IridiumSBD::try_SBDIX(uint8_t *rxBuffer, size_t *prxBufferSize)
 {  // Long SBDIX loop begins here
    for (unsigned long start = millis(); millis() - start < 1000UL * sendReceiveTimeout;)
    {
@@ -726,18 +726,18 @@ int IridiumSBD::try_SBDIX()
             dbg(F("SBDIX success!\r\n"));
 
             this->remainingMessages = mtRemaining;
-            // if (mtCode == 1 && rxBuffer) // retrieved 1 message
-            // {
-            //    dbg(F("Incoming message!\r\n"));
-            //    return doSBDRB(rxBuffer, prxBufferSize);
-            // }
+            if (mtCode == 1 && rxBuffer) // retrieved 1 message
+            {
+               dbg(F("Incoming message!\r\n"));
+               return doSBDRB(rxBuffer, prxBufferSize);
+            }
 
-            // else
-            // {
-            //    // No data returned
-            //    if (prxBufferSize) 
-            //       *prxBufferSize = 0;
-            // }
+            else
+            {
+               // No data returned
+               if (prxBufferSize) 
+                  *prxBufferSize = 0;
+            }
             return ISBD_SUCCESS;
          }
 
